@@ -142,10 +142,16 @@ class Transformer(nn.Module):
         mlp_dim,
         dropout=0.0,
         block_class=Block,
+        cycle_steps=1,
+        cycle_noise_std=0.0,
+        cycle_dropout=0.0,
     ):
         super().__init__()
         self.norm = nn.LayerNorm(hidden_dim)
         self.layers = nn.ModuleList([])
+        self.cycle_steps = max(int(cycle_steps), 1)
+        self.cycle_noise_std = float(cycle_noise_std)
+        self.cycle_dropout = nn.Dropout(cycle_dropout)
 
         self.input_proj = (
             nn.Linear(input_dim, hidden_dim)
@@ -178,8 +184,13 @@ class Transformer(nn.Module):
         if c is not None and hasattr(self, "cond_proj"):
             c = self.cond_proj(c)
 
-        for block in self.layers:
-            x = block(x) if isinstance(block, Block) else block(x, c)
+        for _ in range(self.cycle_steps):
+            for block in self.layers:
+                x = block(x) if isinstance(block, Block) else block(x, c)
+
+            x = self.cycle_dropout(x)
+            if self.training and self.cycle_noise_std > 0:
+                x = x + torch.randn_like(x) * self.cycle_noise_std
         x = self.norm(x)
 
         if hasattr(self, "output_proj"):
@@ -257,6 +268,9 @@ class ARPredictor(nn.Module):
         dim_head=64,
         dropout=0.0,
         emb_dropout=0.0,
+        cycle_steps=1,
+        cycle_noise_std=0.0,
+        cycle_dropout=0.0,
     ):
         super().__init__()
         self.pos_embedding = nn.Parameter(torch.randn(1, num_frames, input_dim))
@@ -271,6 +285,9 @@ class ARPredictor(nn.Module):
             mlp_dim,
             dropout,
             block_class=ConditionalBlock,
+            cycle_steps=cycle_steps,
+            cycle_noise_std=cycle_noise_std,
+            cycle_dropout=cycle_dropout,
         )
 
     def forward(self, x, c):
