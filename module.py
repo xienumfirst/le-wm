@@ -149,9 +149,20 @@ class Transformer(nn.Module):
         super().__init__()
         self.norm = nn.LayerNorm(hidden_dim)
         self.layers = nn.ModuleList([])
-        self.cycle_steps = max(int(cycle_steps), 1)
-        self.cycle_noise_std = float(cycle_noise_std)
-        self.cycle_dropout = nn.Dropout(cycle_dropout)
+        try:
+            cycle_steps_int = int(cycle_steps)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"cycle_steps must be an integer >= 1, got {cycle_steps!r}") from e
+        if cycle_steps_int < 1:
+            raise ValueError(f"cycle_steps must be >= 1, got {cycle_steps!r}")
+        self.cycle_steps = cycle_steps_int
+        try:
+            self.cycle_noise_std = float(cycle_noise_std)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"cycle_noise_std must be a float >= 0, got {cycle_noise_std!r}") from e
+        if self.cycle_noise_std < 0:
+            raise ValueError(f"cycle_noise_std must be >= 0, got {cycle_noise_std!r}")
+        self.cycle_dropout_layer = nn.Dropout(cycle_dropout)
 
         self.input_proj = (
             nn.Linear(input_dim, hidden_dim)
@@ -184,13 +195,14 @@ class Transformer(nn.Module):
         if c is not None and hasattr(self, "cond_proj"):
             c = self.cond_proj(c)
 
-        for _ in range(self.cycle_steps):
+        for step in range(self.cycle_steps):
             for block in self.layers:
                 x = block(x) if isinstance(block, Block) else block(x, c)
 
-            x = self.cycle_dropout(x)
-            if self.training and self.cycle_noise_std > 0:
-                x = x + torch.randn_like(x) * self.cycle_noise_std
+            if self.training and step < self.cycle_steps - 1:
+                x = self.cycle_dropout_layer(x)
+                if self.cycle_noise_std > 0:
+                    x = x + torch.randn_like(x) * self.cycle_noise_std
         x = self.norm(x)
 
         if hasattr(self, "output_proj"):
